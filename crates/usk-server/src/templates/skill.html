@@ -1,0 +1,32 @@
+<!--
+  Static documentation of the skill detail page structure.
+  The actual rendering happens in `web.rs` via maud templates (compile-time).
+  This file exists to document the page layout and is not loaded at runtime.
+
+  Page structure:
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>{name} v{version} — usk registry</title>
+      </head>
+      <body>
+        <header><h1><a href="/">usk registry</a></h1></header>
+        <main>
+          <h2>{name} <span class="meta">v{version}</span></h2>
+          <dl>
+            <dt>Description</dt><dd>{description}</dd>
+            <dt>Author</dt><dd>{author}</dd>
+            <dt>Tags</dt><dd class="tags"><span>{tag}</span>...</dd>
+            <dt>Harnesses</dt><dd>{harness1, harness2}</dd>
+          </dl>
+          <hr/>
+          <div class="skill-body">
+            <!-- rendered SKILL.md as HTML -->
+            <!-- pulldown-cmark escapes raw HTML in source, so <script>
+                 tags in SKILL.md do not execute. -->
+          </div>
+          <p><a href="/">← back to all skills</a></p>
+        </main>
+      </body>
+    </html>
+-->

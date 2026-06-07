@@ -26,13 +26,20 @@ enum Commands {
         /// Search query
         query: String,
     },
-    /// Install a skill from the registry
+    /// Install a skill from the registry, a local path, or a URL
     Install {
-        /// Name of the skill to install
+        /// Name of the skill, local path (./foo, /abs/path, ~/foo),
+        /// or URL (https://..., git@...)
         name: String,
         /// Target harness (e.g., claude-code, codex-cli)
         #[arg(long)]
         harness: Option<String>,
+        /// Override the install path (defaults to the harness-native location)
+        #[arg(long)]
+        target: Option<String>,
+        /// Install from usk.lock instead of the named source (U12)
+        #[arg(long)]
+        locked: bool,
     },
     /// List installed skills
     List,
@@ -47,6 +54,34 @@ enum Commands {
     Harness {
         #[command(subcommand)]
         command: HarnessCommands,
+    },
+    /// Show a skill's contents (files, sizes, parsed metadata)
+    Inspect {
+        /// Path to the skill directory to inspect
+        path: String,
+    },
+    /// Print a file from a skill directory to stdout
+    Read {
+        /// Path to the skill directory
+        path: String,
+        /// Relative file path within the skill
+        file: String,
+    },
+    /// Run structural validation on a skill directory
+    Validate {
+        /// Path to the skill directory to validate
+        path: String,
+    },
+    /// Convert a skill to a harness-specific output (dry-run preview)
+    Convert {
+        /// Path to the skill directory
+        path: String,
+        /// Target harness
+        #[arg(long)]
+        harness: String,
+        /// Output directory
+        #[arg(long)]
+        out: String,
     },
 }
 
@@ -67,6 +102,11 @@ enum HarnessCommands {
 }
 
 mod registry;
+mod inspect;
+mod read;
+mod validate_cmd;
+mod convert;
+mod local_install;
 
 #[tokio::main]
 async fn main() {
@@ -79,7 +119,9 @@ async fn main() {
         Commands::New { name } => commands::new_skill(&name, &config),
         Commands::Publish { path } => commands::publish(&path, &config, &client).await,
         Commands::Search { query } => commands::search(&query, &client).await,
-        Commands::Install { name, harness } => commands::install(&name, harness.as_deref(), &config, &client).await,
+        Commands::Install { name, harness, target, locked } => {
+            commands::install(&name, harness.as_deref(), target.as_deref(), locked, &config, &client).await
+        }
         Commands::List => commands::list(&config),
         Commands::Update { name } => commands::update(name.as_deref(), &config, &client).await,
         Commands::Outdated => commands::outdated(&config, &client).await,
@@ -88,6 +130,12 @@ async fn main() {
             HarnessCommands::Remove { name } => commands::harness_remove(&name, &config),
             HarnessCommands::List => commands::harness_list(&config),
         },
+        Commands::Inspect { path } => inspect::inspect(std::path::Path::new(&path)),
+        Commands::Read { path, file } => read::read(std::path::Path::new(&path), &file),
+        Commands::Validate { path } => validate_cmd::validate(std::path::Path::new(&path)),
+        Commands::Convert { path, harness, out } => {
+            convert::convert(std::path::Path::new(&path), &harness, std::path::Path::new(&out))
+        }
     };
 
     if let Err(e) = result {
@@ -170,8 +218,120 @@ entry: SKILL.md
         Ok(())
     }
 
-    pub async fn install(name: &str, harness: Option<&str>, config: &Config, client: &RegistryClient) -> Result<(), String> {
-        println!("Installing '{}'...", name);
+    pub async fn install(name: &str, harness: Option<&str>, target: Option<&str>, locked: bool, config: &Config, client: &RegistryClient) -> Result<(), String> {
+        use crate::local_install::{
+            default_lockfile_path, entry_from_install, install_collection,
+            install_with_requires, is_collection, load_lockfile_at,
+            record_to_lockfile,
+        };
+
+        // --locked: install from usk.lock, ignoring `name` (U12)
+        if locked {
+            let lf = load_lockfile_at(&default_lockfile_path());
+            if lf.skill.is_empty() {
+                return Err("no skills in usk.lock; run `usk install <name>` first to populate it".to_string());
+            }
+            for entry in &lf.skill {
+                println!("  Installing {} v{} ({})...", entry.name, entry.version, entry.harness);
+                if let Err(e) = client.download(&entry.name, &entry.version, &entry.install_path).await {
+                    eprintln!("    warning: download failed: {}", e);
+                    continue;
+                }
+                if let Some(adapter) = adapter_for(&entry.harness) {
+                    if let Err(e) = adapter.convert_to(&entry.name, &entry.version, &entry.install_path) {
+                        eprintln!("    warning: conversion failed: {}", e);
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        // Tri-modal dispatch (Tier 1 / U2):
+        //   1. Local path: starts with ./, ../, /, or ~. Read
+        //      skill.yaml directly and run the harness adapter.
+        //   2. URL: http(s)://, git@, git://, ssh://. Fetch to a
+        //      tempdir and run the local-path flow.
+        //   3. Registry: anything else. Hit the registry server.
+        // Local and URL install require an explicit harness (it
+        // determines the install path). Registry install falls back
+        // to the registered harnesses if `--harness` is omitted
+        // (preserves the original behavior).
+        let effective_harness = harness;
+
+        if crate::local_install::is_local_path(name) {
+            let harness_name = effective_harness.ok_or_else(|| {
+                "no harness specified; pass --harness <name>".to_string()
+            })?;
+            let source = expand_user(name);
+            let target_path = target.map(Path::new);
+
+            // Collection detection (U11): if `source` is a directory of
+            // multiple skill subdirs, route to the collection flow.
+            if is_collection(&source) {
+                println!("Installing collection from '{}'...", name);
+                let paths = install_collection(&source, harness_name, config)?;
+                for path in &paths {
+                    println!("  Installed to {}", path.display());
+                    if let Err(e) = record_to_lockfile_at_install(path, harness_name) {
+                        eprintln!("  warning: lockfile write failed: {}", e);
+                    }
+                }
+                return Ok(());
+            }
+
+            // Single skill from local path
+            println!("Installing local skill from '{}'...", name);
+            let result = crate::local_install::install_from_path_with_target(
+                &source,
+                harness_name,
+                config,
+                target_path,
+            )?;
+            println!("  Installed to {}", result.display());
+
+            // Lockfile write (U12)
+            if let Err(e) = record_to_lockfile_at_install(&result, harness_name) {
+                eprintln!("  warning: lockfile write failed: {}", e);
+            }
+
+            // `requires` resolution (U10): surface a warning if the skill
+            // declares dependencies that can't be resolved locally.
+            if let Ok(skill) = usk_core::parser::parse_skill_yaml(&source.join("skill.yaml")) {
+                if !skill.requires.is_empty() {
+                    let result = install_with_requires(
+                        &source,
+                        harness_name,
+                        config,
+                        |_name| None,  // v1: no local registry lookup
+                        |_name, _version| skill.requires.clone(),
+                    );
+                    if let Err(e) = result {
+                        eprintln!("  warning: requires resolution: {}", e);
+                    }
+                }
+            }
+
+            return Ok(());
+        }
+
+        if crate::local_install::is_url(name) {
+            println!("Installing from URL '{}'...", name);
+            let harness_name = effective_harness.ok_or_else(|| {
+                "no harness specified; pass --harness <name>".to_string()
+            })?;
+            // URL install: the inner local-path flow honors the
+            // harness-native location; --target is not currently
+            // threaded through to URL install.
+            let _ = target;
+            let result = crate::local_install::install_from_url(name, harness_name, config)?;
+            println!("  Installed to {}", result.display());
+            if let Err(e) = record_to_lockfile_at_install(&result, harness_name) {
+                eprintln!("  warning: lockfile write failed: {}", e);
+            }
+            return Ok(());
+        }
+
+        println!("Installing '{}' from registry...", name);
 
         let meta = client.get_package(name).await?;
 
@@ -180,16 +340,6 @@ entry: SKILL.md
             return Err("no harness adapters matched; use `usk harness add <name>` to register".to_string());
         }
 
-        // We persist the install once per (name, harness) pair.
-        // Keying decision: `config.installed` is keyed by the skill name only
-        // (`HashMap<String, InstalledSkill>`), and `InstalledSkill` carries
-        // a single `harness` field. This matches the existing schema and keeps
-        // the "one skill = one entry" model simple. If a user installs the
-        // same skill for multiple harnesses, the LAST one wins in the map.
-        // This is acceptable for v1: the install path on disk is namespaced
-        // per-harness under `install_dir/<harness>/<name>/`, so files do not
-        // collide. Callers that need per-harness tracking can re-run install
-        // with `--harness <name>` for each target.
         let mut config = config.clone();
 
         for adapter in &adapters {
@@ -197,9 +347,6 @@ entry: SKILL.md
             let skill_install = install_base.join(name);
             std::fs::create_dir_all(&skill_install).map_err(|e| format!("create install dir: {}", e))?;
 
-            // Download and extract the tarball BEFORE converting so that
-            // `load_skill` can read a real `skill.yaml` instead of falling
-            // through to the empty fallback.
             if let Err(e) = client.download(name, &meta.version, &skill_install).await {
                 eprintln!("  warning: download for '{}' failed: {}", adapter.name(), e);
                 continue;
@@ -210,8 +357,6 @@ entry: SKILL.md
                 continue;
             }
 
-            // Persist to config so `usk list`, `usk update`, and
-            // `usk outdated` can see this install.
             config.installed.insert(
                 name.to_string(),
                 usk_core::config::InstalledSkill {
@@ -221,11 +366,49 @@ entry: SKILL.md
                 },
             );
 
+            // Lockfile write (U12)
+            let entry = entry_from_install(name, &meta.version, adapter.name(), &skill_install);
+            if let Err(e) = record_to_lockfile(&entry) {
+                eprintln!("  warning: lockfile write failed: {}", e);
+            }
+
             println!("  Installed for harness: {}", adapter.name());
         }
 
         config.save().map_err(|e| format!("failed to save config: {}", e))?;
         Ok(())
+    }
+
+    /// Build a `LockEntry` from an installed skill's directory by
+    /// re-reading its `skill.yaml`, and append it to `usk.lock`.
+    /// Used after every install path (local, URL, collection) so the
+    /// lockfile reflects on-disk state.
+    fn record_to_lockfile_at_install(
+        install_path: &Path,
+        harness: &str,
+    ) -> Result<(), String> {
+        let yaml_path = install_path.join("skill.yaml");
+        let content = std::fs::read_to_string(&yaml_path)
+            .map_err(|e| format!("read {}: {}", yaml_path.display(), e))?;
+        let skill: usk_core::schema::Skill = serde_yaml::from_str(&content)
+            .map_err(|e| format!("parse {}: {}", yaml_path.display(), e))?;
+        let entry = crate::local_install::entry_from_install(&skill.name, &skill.version, harness, install_path);
+        crate::local_install::record_to_lockfile(&entry)
+    }
+
+    /// Expand a leading `~` or `~/...` to the home directory. Used
+    /// for the local-path install flow.
+    fn expand_user(path: &str) -> std::path::PathBuf {
+        if path == "~" {
+            if let Ok(home) = std::env::var("HOME") {
+                return std::path::PathBuf::from(home);
+            }
+        } else if let Some(rest) = path.strip_prefix("~/") {
+            if let Ok(home) = std::env::var("HOME") {
+                return std::path::PathBuf::from(home).join(rest);
+            }
+        }
+        std::path::PathBuf::from(path)
     }
 
     pub fn list(config: &Config) -> Result<(), String> {
@@ -664,7 +847,7 @@ entry: SKILL.md
         };
 
         let client = RegistryClient::new(&base_url);
-        let result = install("demo-skill", None, &config, &client).await;
+        let result = install("demo-skill", None, None, false, &config, &client).await;
         assert!(result.is_ok(), "install failed: {:?}", result.err());
 
         // Re-load config from disk to verify persistence.

@@ -21,8 +21,13 @@ impl Default for Config {
     fn default() -> Self {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
         let usk_dir = PathBuf::from(&home).join(".usk");
+        // The default registry. Self-hosting remains supported by overriding
+        // `registry_url` in `~/.usk/config.toml` or via the `USK_REGISTRY_URL`
+        // env var. The default points to the public USK registry; if it is
+        // unreachable, `usk install <name>` (registry mode) will fail with a
+        // clear connection error.
         Config {
-            registry_url: "http://localhost:8080".to_string(),
+            registry_url: "https://registry.usk.dev".to_string(),
             install_dir: usk_dir.join("skills"),
             harnesses: HashMap::from([
                 ("claude-code".to_string(), "usk-harness-claude".to_string()),

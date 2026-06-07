@@ -4,3 +4,5 @@ pub mod parser;
 pub mod index;
 pub mod error;
 pub mod config;
+pub mod lockfile;
+pub mod resolver;

@@ -14,8 +14,10 @@ This project follows the [Contributor Covenant v2.1](CODE_OF_CONDUCT.md). By par
 
 ## Setup
 
+Fork the repository on GitHub, then clone your fork:
+
 ```bash
-git clone https://github.com/YOUR-USERNAME/usk
+git clone https://github.com/<your-username>/usk
 cd usk
 cargo build --workspace
 cargo test --workspace

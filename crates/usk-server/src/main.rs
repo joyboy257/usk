@@ -13,6 +13,8 @@ use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock};
 use usk_core::index::RegistryIndex;
 
+mod web;
+
 /// Per-(name, version) publish lock map. The outer `Mutex` guards the
 /// `HashMap`; each entry stores a `Weak` ref so the lock is released
 /// the moment the last strong holder drops it. `acquire_publish_lock`
@@ -21,7 +23,7 @@ use usk_core::index::RegistryIndex;
 type LockMap = Arc<Mutex<HashMap<(String, String), Weak<Mutex<()>>>>>;
 
 #[derive(Clone)]
-struct AppState {
+pub struct AppState {
     index: Arc<RwLock<RegistryIndex>>,
     registry_path: PathBuf,
     publish_locks: LockMap,
@@ -62,6 +64,7 @@ async fn main() {
         .route("/api/v1/packages/{name}/{version}", get(handle_package_version))
         .route("/api/v1/packages/{name}/{version}/download", get(handle_download))
         .route("/api/v1/publish", post(handle_publish))
+        .merge(web::routes())
         .with_state(state);
 
     let addr = "0.0.0.0:8080";

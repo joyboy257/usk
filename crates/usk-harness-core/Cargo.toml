@@ -9,3 +9,7 @@ usk-core = { path = "../usk-core" }
 thiserror.workspace = true
 semver.workspace = true
 serde_yaml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+serial_test.workspace = true

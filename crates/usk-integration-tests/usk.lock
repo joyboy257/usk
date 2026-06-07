@@ -1,0 +1,7 @@
+version = 1
+
+[[skill]]
+name = "escalation-handling"
+version = "1.0.0"
+harness = "claude-code"
+install_path = "/tmp/claude-501/.tmpHyvIL8/skills/claude-code/escalation-handling"

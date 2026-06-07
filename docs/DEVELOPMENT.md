@@ -11,7 +11,7 @@ This guide covers day-to-day development: environment, testing, debugging, and h
 Clone and build:
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/usk
+git clone https://github.com/<your-username>/usk
 cd usk
 cargo build --workspace
 ```

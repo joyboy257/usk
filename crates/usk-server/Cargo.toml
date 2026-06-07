@@ -19,3 +19,5 @@ flate2.workspace = true
 tar.workspace = true
 tempfile.workspace = true
 git2.workspace = true
+pulldown-cmark.workspace = true
+maud.workspace = true

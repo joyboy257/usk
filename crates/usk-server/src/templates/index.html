@@ -1,0 +1,28 @@
+<!--
+  Static documentation of the index page structure.
+  The actual rendering happens in `web.rs` via maud templates (compile-time).
+  This file exists to document the page layout and is not loaded at runtime.
+
+  Page structure:
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>All skills — usk registry</title>
+      </head>
+      <body>
+        <header><h1><a href="/">usk registry</a></h1></header>
+        <main>
+          <h2>All skills</h2>
+          <ul class="skills">
+            <li>
+              <a href="/skills/{name}"><strong>{name}</strong></a>
+              <span class="meta">v{version}</span>
+              <p>{description}</p>
+              <div class="tags"><span>{tag}</span>...</div>
+            </li>
+            ...
+          </ul>
+        </main>
+      </body>
+    </html>
+-->

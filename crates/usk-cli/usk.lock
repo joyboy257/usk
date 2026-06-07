@@ -1,0 +1,7 @@
+version = 1
+
+[[skill]]
+name = "demo-skill"
+version = "1.2.3"
+harness = "claude-code"
+install_path = "/tmp/claude-501/.tmpnI6mLV/skills/claude-code/demo-skill"

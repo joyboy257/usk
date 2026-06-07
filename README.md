@@ -2,7 +2,6 @@
 
 > A harness-agnostic registry for reusable AI agent skills.
 
-[![CI](https://img.shields.io/github/actions/workflow/status/YOUR-USERNAME/usk/ci.yml?branch=main&style=flat-square)](https://github.com/YOUR-USERNAME/usk/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Crates.io](https://img.shields.io/crates/v/usk-core.svg?style=flat-square)](https://crates.io/crates/usk-core)
 
@@ -28,18 +27,46 @@ AI agent frameworks are multiplying. Without a shared skills layer, every team r
 
 ## Quick Start
 
+Install `usk` with a one-liner, then drop a skill folder in and install it — no registry server required.
+
 ```bash
-# Install the CLI
-cargo install --path crates/usk-cli
+# 1. Install the CLI (no Rust toolchain needed for consumers)
+curl -fsSL https://usk.dev/install.sh | sh
 
-# Create a new skill from a template
-usk new my-escalation-skill
+# 2. Install a skill from a local directory for Claude Code
+usk install ./spec/examples/escalation-handling --harness claude-code
 
-# Search the local index
-usk search escalation
+# Files land at ~/.claude/skills/escalation-handling/ — exactly where
+# Claude Code reads from. No staging dir, no manual copy.
+```
 
-# Install a skill for Claude Code
-usk install escalation-handling --harness claude-code
+The same flow works for URLs (HTTP archive or git clone) and for the
+registry server when you have one. See [CLI Reference](#cli-reference)
+for the full surface.
+
+### Authoring
+
+```bash
+# Create a new skill from the default scaffold
+usk new my-skill
+
+# Inspect / validate / preview conversion before publishing
+usk inspect ./my-skill
+usk validate ./my-skill
+usk convert ./my-skill --harness claude-code --out /tmp/preview
+```
+
+### Self-hosting the registry (optional)
+
+`usk` works without a registry, but the same CLI also installs from
+one when you want versioned, shared skills:
+
+```bash
+cargo run --bin usk-server
+# Server listening on 0.0.0.0:8080
+
+# Configure the CLI to point at the local registry
+usk config set registry_url http://localhost:8080
 ```
 
 ## Anatomy of a Skill
@@ -66,7 +93,7 @@ See [`spec/SKILL_SPEC.md`](spec/SKILL_SPEC.md) for the full schema and the [exam
 | `usk new <name>` | Scaffold a new skill from a template |
 | `usk publish [path]` | Publish a skill to the local registry |
 | `usk search <query>` | Search the registry by name, tag, or description |
-| `usk install <name> [--harness <name>]` | Install a skill for a specific harness |
+| `usk install <name-or-path-or-url> [--harness <name>] [--target <path>]` | Install a skill from the registry, a local directory, or a URL |
 | `usk list` | List installed skills |
 | `usk update [name]` | Update installed skills (defaults to all) |
 | `usk outdated` | List skills with available updates |
