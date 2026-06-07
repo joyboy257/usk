@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary: usk-cli
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary: usk-cli
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary: usk-server
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            binary: usk-server
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            binary: usk-cli
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            binary: usk-cli
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            binary: usk-server
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            binary: usk-server
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            binary: usk-cli
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            binary: usk-server
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Build release
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin ${{ matrix.binary }}
+
+      - name: Strip and stage binary
+        shell: bash
+        run: |
+          mkdir -p staging
+          BIN=target/${{ matrix.target }}/release/${{ matrix.binary }}
+          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
+            cp "$BIN.exe" "staging/${{ matrix.binary }}-${{ matrix.target }}.exe"
+          else
+            strip "$BIN" -o "staging/${{ matrix.binary }}-${{ matrix.target }}"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary }}-${{ matrix.target }}
+          path: staging/${{ matrix.binary }}-${{ matrix.target }}*
+
+  release:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: artifacts/**/*

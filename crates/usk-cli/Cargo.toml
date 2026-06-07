@@ -1,0 +1,29 @@
+[package]
+name = "usk-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+usk-core = { path = "../usk-core" }
+usk-harness-core = { path = "../usk-harness-core" }
+usk-harness-claude = { path = "../usk-harness-claude" }
+usk-harness-codex = { path = "../usk-harness-codex" }
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+flate2.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+urlencoding = "2"
+serde_yaml.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tempfile.workspace = true
+serial_test.workspace = true

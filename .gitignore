@@ -1,0 +1,23 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Test artifacts
+/tmp/
+
+# Local config overrides
+.env
+.env.local
+usk-test-config/
+
+# Tooling state (oh-my-claudecode, Claude Code session state)
+.omc/
+.claude/

@@ -1,0 +1,19 @@
+name: sales-call-prep
+version: 1.0.0
+description: >
+  Prepare for a sales call by reviewing account history, identifying the real
+  buyer, surfacing unstated objections, and framing key questions.
+author: acme-corp-sales
+license: MIT
+tags:
+  - sales
+  - customer-facing
+  - preparation
+  - account-review
+harnesses:
+  claude-code: ">=0.1"
+  codex-cli: ">=0.1"
+entry: SKILL.md
+config:
+  timeout: 300
+  temperature: 0.3

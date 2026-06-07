@@ -1,0 +1,19 @@
+name: escalation-handling
+version: 1.0.0
+description: >
+  Systematically assess and respond to customer escalations by evaluating
+  ticket history, account value, tone signals, and product pain.
+author: acme-corp-support
+license: MIT
+tags:
+  - support
+  - escalation
+  - customer-facing
+  - triage
+harnesses:
+  claude-code: ">=0.1"
+  codex-cli: ">=0.1"
+entry: SKILL.md
+config:
+  timeout: 300
+  temperature: 0.3
