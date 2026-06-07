@@ -21,3 +21,10 @@ usk-test-config/
 # Tooling state (oh-my-claudecode, Claude Code session state)
 .omc/
 .claude/
+
+# Test artifacts written to cwd by the lockfile/config tests
+# (usk-core/tests and usk-cli/src tests that read default_lockfile_path()
+# or default config paths land them under whichever crate's cwd the
+# test binary is invoked from)
+crates/**/.usk/
+crates/**/usk.lock
