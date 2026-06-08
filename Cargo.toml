@@ -45,7 +45,7 @@ once_cell = "1"
 flate2 = "1"
 tar = "0.4"
 pulldown-cmark = "0.12"
-maud = "0.26"
+maud = "0.27"
 
 [workspace.dependencies.tempfile]
 version = "3"
