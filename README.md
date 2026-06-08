@@ -40,9 +40,11 @@ usk install ./spec/examples/escalation-handling --harness claude-code
 # Claude Code reads from. No staging dir, no manual copy.
 ```
 
-The same flow works for URLs (HTTP archive or git clone) and for the
-registry server when you have one. See [CLI Reference](#cli-reference)
-for the full surface.
+The same flow works for URLs (HTTP archive or git clone) and for a
+self-hosted registry when you have one. `usk install <name>` (registry
+mode) requires `registry_url` to be configured in `~/.usk/config.toml`
+— see [Self-hosted registry (optional)](#self-hosted-registry-optional).
+See [CLI Reference](#cli-reference) for the full surface.
 
 ### Authoring
 
@@ -58,8 +60,11 @@ usk convert ./my-skill --harness claude-code --out /tmp/preview
 
 ### Self-hosting the registry (optional)
 
-`usk` works without a registry, but the same CLI also installs from
-one when you want versioned, shared skills:
+`usk` works without a registry — the local-first install path in
+[Quick Start](#quick-start) is the default and does not need a server.
+A registry is only useful if you want versioned, shared skills across
+a team. `usk install <name>` (registry mode) requires `registry_url`
+to be configured in `~/.usk/config.toml`.
 
 ```bash
 cargo run --bin usk-server
@@ -99,7 +104,12 @@ See [`spec/SKILL_SPEC.md`](spec/SKILL_SPEC.md) for the full schema and the [exam
 | `usk outdated` | List skills with available updates |
 | `usk harness add\|remove\|list` | Manage registered harnesses |
 
-## Server
+## Self-hosted registry (optional)
+
+If you have a private registry or want to share skills within a team, USK
+includes a self-hostable server. **Most users do not need this** — the
+local-first install path in [Quick Start](#quick-start) covers the
+central use case without running any server.
 
 The `usk-server` is an axum-based registry server with a git audit trail. Run it locally:
 
@@ -115,7 +125,11 @@ Configuration:
 | `USK_REGISTRY_PATH` | `./registry` | Filesystem path for the on-disk registry |
 | `RUST_LOG` | `info` | Tracing filter directive |
 
-The CLI reads its registry URL from `~/.usk/config.toml` (override via `USK_CONFIG_DIR`). See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the API surface and data flow.
+The CLI reads its registry URL from `~/.usk/config.toml` (override via
+`USK_CONFIG_DIR`). The default config has an empty `registry_url`; the
+`usk install <name>` (registry mode) flow errors with a clear message
+if you have not set one. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+for the API surface and data flow.
 
 ## Project Layout
 

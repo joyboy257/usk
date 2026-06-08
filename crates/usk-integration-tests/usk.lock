@@ -4,4 +4,4 @@ version = 1
 name = "escalation-handling"
 version = "1.0.0"
 harness = "claude-code"
-install_path = "/tmp/claude-501/.tmpHyvIL8/skills/claude-code/escalation-handling"
+install_path = "/tmp/claude-501/.tmpSsrKm2/skills/claude-code/escalation-handling"

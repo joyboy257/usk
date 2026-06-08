@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use usk_core::schema::Skill;
 use usk_harness_core::adapter::HarnessAdapter;
 use usk_harness_core::error::Result;
@@ -9,6 +9,10 @@ pub struct ClaudeCodeAdapter;
 impl HarnessAdapter for ClaudeCodeAdapter {
     fn name(&self) -> &str {
         "claude-code"
+    }
+
+    fn install_root(&self) -> Option<PathBuf> {
+        usk_harness_core::paths::install_root("claude-code")
     }
 
     fn convert(&self, skill: &Skill, source_dir: &Path, output_dir: &Path) -> Result<()> {

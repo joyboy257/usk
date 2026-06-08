@@ -83,6 +83,20 @@ enum Commands {
         #[arg(long)]
         out: String,
     },
+    /// Diagnose USK setup: paths, writability, installed skills, lockfile state
+    Doctor,
+    /// Enable a disabled skill (re-create the harness projection)
+    Enable {
+        /// Name of the skill to enable
+        name: String,
+    },
+    /// Disable an enabled skill (remove the harness projection; store entry is kept)
+    Disable {
+        /// Name of the skill to disable
+        name: String,
+    },
+    /// List installed skills with their enabled/disabled state
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -107,6 +121,7 @@ mod read;
 mod validate_cmd;
 mod convert;
 mod local_install;
+mod doctor;
 
 #[tokio::main]
 async fn main() {
@@ -136,6 +151,13 @@ async fn main() {
         Commands::Convert { path, harness, out } => {
             convert::convert(std::path::Path::new(&path), &harness, std::path::Path::new(&out))
         }
+        Commands::Doctor => {
+            let lf = local_install::load_lockfile_at(&local_install::default_lockfile_path());
+            doctor::doctor(&config, Some(&lf))
+        }
+        Commands::Enable { name } => commands::enable(&name, &config),
+        Commands::Disable { name } => commands::disable(&name, &config),
+        Commands::Status => commands::status(&config),
     };
 
     if let Err(e) = result {
@@ -147,6 +169,8 @@ async fn main() {
 mod commands {
     use std::path::Path;
     use usk_core::config::Config;
+    use usk_harness_core::adapter::HarnessAdapter;
+    use usk_harness_core::error::HarnessError;
 
     use crate::registry::RegistryClient;
 
@@ -237,10 +261,34 @@ entry: SKILL.md
                     eprintln!("    warning: download failed: {}", e);
                     continue;
                 }
-                if let Some(adapter) = adapter_for(&entry.harness) {
-                    if let Err(e) = adapter.convert_to(&entry.name, &entry.version, &entry.install_path) {
-                        eprintln!("    warning: conversion failed: {}", e);
+                let adapter: Box<dyn HarnessAdapter> = match entry.harness.as_str() {
+                    "claude-code" => Box::new(usk_harness_claude::converter::ClaudeCodeAdapter),
+                    "codex-cli" => Box::new(usk_harness_codex::converter::CodexCliAdapter),
+                    other => {
+                        eprintln!(
+                            "    warning: harness '{}' has no built-in adapter; skipping conversion",
+                            other
+                        );
+                        continue;
                     }
+                };
+                let skill = match load_skill(&entry.install_path) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("    warning: {}", e);
+                        continue;
+                    }
+                };
+                let output = entry.install_path.join("converted");
+                if let Err(e) = std::fs::create_dir_all(&output) {
+                    eprintln!("    warning: create converted dir: {}", e);
+                    continue;
+                }
+                if let Err(e) = adapter
+                    .convert(&skill, &entry.install_path, &output)
+                    .map_err(|e: HarnessError| e.to_string())
+                {
+                    eprintln!("    warning: conversion failed: {}", e);
                 }
             }
             return Ok(());
@@ -333,47 +381,82 @@ entry: SKILL.md
 
         println!("Installing '{}' from registry...", name);
 
+        // U6: registry mode is opt-in. If the user has not configured a
+        // `registry_url`, fail early with a message that points at the
+        // local-first and URL install paths, plus how to enable a
+        // private registry. This must run before any network call so
+        // the user does not get an opaque connection error.
+        if config.registry_url.is_empty() {
+            return Err(
+                "no registry URL configured. Use `usk install <path>` or `usk install <url>`, or set `registry_url` in `~/.usk/config.toml`."
+                    .to_string(),
+            );
+        }
+
         let meta = client.get_package(name).await?;
 
-        let adapters = get_adapters(harness, config);
-        if adapters.is_empty() {
-            return Err("no harness adapters matched; use `usk harness add <name>` to register".to_string());
-        }
+        // Pick the single harness to install for. The v0.2 plan
+        // de-emphasizes registry mode and U3 collapses the loop to
+        // one match: --harness is preferred; otherwise we use the
+        // first registered harness (with a clear error if none).
+        let harness_name: &str = match harness {
+            Some(h) => h,
+            None => config
+                .harnesses
+                .keys()
+                .next()
+                .ok_or_else(|| {
+                    "no harness specified and no harnesses registered; pass --harness <name> or run `usk harness add <name>`"
+                        .to_string()
+                })?
+                .as_str(),
+        };
+
+        let adapter: Box<dyn HarnessAdapter> = match harness_name {
+            "claude-code" => Box::new(usk_harness_claude::converter::ClaudeCodeAdapter),
+            "codex-cli" => Box::new(usk_harness_codex::converter::CodexCliAdapter),
+            other => {
+                return Err(format!(
+                    "unknown harness '{}'; use `usk harness add` to register",
+                    other
+                ));
+            }
+        };
 
         let mut config = config.clone();
+        let install_base = config.install_dir.join(adapter.name());
+        let skill_install = install_base.join(name);
+        std::fs::create_dir_all(&skill_install)
+            .map_err(|e| format!("create install dir: {}", e))?;
 
-        for adapter in &adapters {
-            let install_base = config.install_dir.join(adapter.name());
-            let skill_install = install_base.join(name);
-            std::fs::create_dir_all(&skill_install).map_err(|e| format!("create install dir: {}", e))?;
-
-            if let Err(e) = client.download(name, &meta.version, &skill_install).await {
-                eprintln!("  warning: download for '{}' failed: {}", adapter.name(), e);
-                continue;
-            }
-
-            if let Err(e) = adapter.convert_to(name, &meta.version, &skill_install) {
-                eprintln!("  warning: conversion for '{}' failed: {}", adapter.name(), e);
-                continue;
-            }
-
-            config.installed.insert(
-                name.to_string(),
-                usk_core::config::InstalledSkill {
-                    version: meta.version.clone(),
-                    harness: adapter.name().to_string(),
-                    install_path: skill_install.clone(),
-                },
-            );
-
-            // Lockfile write (U12)
-            let entry = entry_from_install(name, &meta.version, adapter.name(), &skill_install);
-            if let Err(e) = record_to_lockfile(&entry) {
-                eprintln!("  warning: lockfile write failed: {}", e);
-            }
-
-            println!("  Installed for harness: {}", adapter.name());
+        if let Err(e) = client.download(name, &meta.version, &skill_install).await {
+            return Err(format!("download for '{}' failed: {}", adapter.name(), e));
         }
+
+        let skill = load_skill(&skill_install)?;
+        let output = skill_install.join("converted");
+        std::fs::create_dir_all(&output)
+            .map_err(|e| format!("create converted dir: {}", e))?;
+        adapter
+            .convert(&skill, &skill_install, &output)
+            .map_err(|e: HarnessError| format!("conversion failed: {}", e))?;
+
+        config.installed.insert(
+            name.to_string(),
+            usk_core::config::InstalledSkill {
+                version: meta.version.clone(),
+                harness: adapter.name().to_string(),
+                install_path: skill_install.clone(),
+            },
+        );
+
+        // Lockfile write (U12)
+        let entry = entry_from_install(name, &meta.version, adapter.name(), &skill_install);
+        if let Err(e) = record_to_lockfile(&entry) {
+            eprintln!("  warning: lockfile write failed: {}", e);
+        }
+
+        println!("  Installed for harness: {}", adapter.name());
 
         config.save().map_err(|e| format!("failed to save config: {}", e))?;
         Ok(())
@@ -501,16 +584,26 @@ entry: SKILL.md
             .await?;
 
         // Re-run the harness conversion for the recorded harness.
-        if let Some(adapter) = adapter_for(&installed.harness) {
-            if let Err(e) = adapter.convert_to(skill_name, new_version, &installed.install_path) {
-                return Err(format!("conversion for '{}' failed: {}", installed.harness, e));
+        // U3 collapsed the HarnessInstaller wrapper to a single match
+        // on the harness key; we follow the same pattern here.
+        let adapter: Box<dyn HarnessAdapter> = match installed.harness.as_str() {
+            "claude-code" => Box::new(usk_harness_claude::converter::ClaudeCodeAdapter),
+            "codex-cli" => Box::new(usk_harness_codex::converter::CodexCliAdapter),
+            other => {
+                eprintln!(
+                    "  warning: no adapter implementation for harness '{}'; skill files updated but not re-converted",
+                    other
+                );
+                return Ok(());
             }
-        } else {
-            eprintln!(
-                "  warning: no adapter implementation for harness '{}'; skill files updated but not re-converted",
-                installed.harness
-            );
-        }
+        };
+        let skill = load_skill(&installed.install_path)?;
+        let output = installed.install_path.join("converted");
+        std::fs::create_dir_all(&output)
+            .map_err(|e| format!("create converted dir: {}", e))?;
+        adapter
+            .convert(&skill, &installed.install_path, &output)
+            .map_err(|e: HarnessError| format!("conversion for '{}' failed: {}", installed.harness, e))?;
 
         if let Some(entry) = config.installed.get_mut(skill_name) {
             entry.version = new_version.to_string();
@@ -523,14 +616,11 @@ entry: SKILL.md
         println!("Outdated installed skills:");
         let mut found = false;
         for (name, info) in &config.installed {
-            match client.get_package(name).await {
-                Ok(meta) => {
-                    if meta.version != info.version {
-                        println!("  {}: {} -> {}", name, info.version, meta.version);
-                        found = true;
-                    }
+            if let Ok(meta) = client.get_package(name).await {
+                if meta.version != info.version {
+                    println!("  {}: {} -> {}", name, info.version, meta.version);
+                    found = true;
                 }
-                Err(_) => {}
             }
         }
         if !found {
@@ -583,133 +673,118 @@ entry: SKILL.md
         Ok(())
     }
 
-    use usk_harness_core::adapter::HarnessAdapter;
-
-    /// Build the list of harness installers to use for an install/update.
+    /// Load and parse the `skill.yaml` for an installed skill.
     ///
-    /// Source of truth: `config.harnesses` (a `HashMap<String, String>`
-    /// of harness key -> adapter crate name). We only support the two
-    /// concrete adapters compiled into this binary; anything else logs a
-    /// warning and is skipped. This keeps `usk harness add` and
-    /// `usk harness list` in sync with what `install` actually does.
-    fn get_adapters(filter: Option<&str>, config: &Config) -> Vec<Box<dyn HarnessInstaller>> {
-        // If the user explicitly filters by a name, only consider that
-        // name (still validated against the known set below).
-        let keys: Vec<String> = match filter {
-            Some(name) => vec![name.to_string()],
-            None => config.harnesses.keys().cloned().collect(),
-        };
-
-        let mut out: Vec<Box<dyn HarnessInstaller>> = Vec::new();
-        for key in keys {
-            // Only act on harnesses the user has registered; this is what
-            // makes `usk harness add foo` matter for `install`.
-            if !config.harnesses.contains_key(&key) && filter.is_none() {
-                continue;
-            }
-            match key.as_str() {
-                "claude-code" => out.push(Box::new(ClaudeInstaller)),
-                "codex-cli" => out.push(Box::new(CodexInstaller)),
-                other => {
-                    eprintln!(
-                        "  warning: harness '{}' is registered but has no built-in adapter; skipping",
-                        other
-                    );
-                }
-            }
-        }
-        out
-    }
-
-    /// Look up a single adapter by its harness key. Used by the update
-    /// path where we already have the harness name recorded in config.
-    fn adapter_for(name: &str) -> Option<Box<dyn HarnessInstaller>> {
-        match name {
-            "claude-code" => Some(Box::new(ClaudeInstaller)),
-            "codex-cli" => Some(Box::new(CodexInstaller)),
-            _ => None,
-        }
-    }
-
-    /// Test-only public wrapper around `get_adapters` so unit tests in
-    /// the parent module can assert on the source-of-truth logic.
-    /// Returns the harness names as `String` so callers don't need to
-    /// invoke the private trait method.
-    #[cfg(test)]
-    pub fn adapter_names_for_test(filter: Option<&str>, config: &Config) -> Vec<String> {
-        get_adapters(filter, config)
-            .iter()
-            .map(|a| a.name().to_string())
-            .collect()
-    }
-
-    trait HarnessInstaller: Send + Sync {
-        fn name(&self) -> &str;
-        fn convert_to(&self, skill_name: &str, version: &str, install_dir: &Path) -> Result<(), String>;
-    }
-
-    // Concrete impls and the trait above are private to this module.
-    // Test code in the parent `tests` module only needs to call `name()`
-    // through a `&dyn HarnessInstaller` reference, which works because
-    // methods on a trait are callable through the trait object regardless
-    // of the trait's own visibility. The error above came from calling
-    // `name()` on a `Box<dyn HarnessInstaller>` from outside the module;
-    // that requires the method to be `pub` on the trait.
-
-    struct ClaudeInstaller;
-
-    impl HarnessInstaller for ClaudeInstaller {
-        fn name(&self) -> &str {
-            "claude-code"
-        }
-
-        fn convert_to(&self, skill_name: &str, _version: &str, install_dir: &Path) -> Result<(), String> {
-            let adapter = usk_harness_claude::converter::ClaudeCodeAdapter;
-            let skill = load_skill(skill_name, install_dir)?;
-            let output = install_dir.join("converted");
-            std::fs::create_dir_all(&output).map_err(|e| e.to_string())?;
-            adapter.convert(&skill, install_dir, &output).map_err(|e: usk_harness_core::error::HarnessError| e.to_string())?;
-            println!("  Converted for Claude Code at {:?}", output);
-            Ok(())
-        }
-    }
-
-    struct CodexInstaller;
-
-    impl HarnessInstaller for CodexInstaller {
-        fn name(&self) -> &str {
-            "codex-cli"
-        }
-
-        fn convert_to(&self, skill_name: &str, _version: &str, install_dir: &Path) -> Result<(), String> {
-            let adapter = usk_harness_codex::converter::CodexCliAdapter;
-            let skill = load_skill(skill_name, install_dir)?;
-            let output = install_dir.join("converted");
-            std::fs::create_dir_all(&output).map_err(|e| e.to_string())?;
-            adapter.convert(&skill, install_dir, &output).map_err(|e: usk_harness_core::error::HarnessError| e.to_string())?;
-            println!("  Converted for Codex CLI at {:?}", output);
-            Ok(())
-        }
-    }
-
-    fn load_skill(name: &str, skill_dir: &Path) -> Result<usk_core::schema::Skill, String> {
+    /// The previous version of this helper returned a default-empty
+    /// `Skill` when no `skill.yaml` was present, which silently
+    /// installed with `name=<arg>` and `version="0.0.0"`. That is a
+    /// latent bug for the registry-mode and update paths: a tarball
+    /// missing a manifest would install with placeholder metadata.
+    /// We now fail loudly so the user can see the missing file.
+    fn load_skill(skill_dir: &Path) -> Result<usk_core::schema::Skill, String> {
         let yaml_path = skill_dir.join("skill.yaml");
         if yaml_path.exists() {
             usk_core::parser::parse_skill_yaml(&yaml_path).map_err(|e| e.to_string())
         } else {
-            Ok(usk_core::schema::Skill {
-                name: name.to_string(),
-                version: "0.0.0".to_string(),
-                description: None,
-                author: None,
-                license: None,
-                tags: vec![],
-                harnesses: std::collections::HashMap::new(),
-                requires: vec![],
-                entry: "SKILL.md".to_string(),
-                config: None,
-            })
+            Err(format!("no skill.yaml found at {}", yaml_path.display()))
         }
+    }
+
+    // ---- enable / disable / status (U4) ---------------------------
+    //
+    // These three commands operate on the `~/.usk/store/index.json`
+    // and the per-harness projection at the harness-native install
+    // path. The store + projection model lets the user toggle a
+    // skill's visibility to the harness without losing its files.
+
+    /// Resolve the harness for a stored skill by matching the name
+    /// across all entries. The same name can exist in multiple
+    /// harnesses (one entry per (harness, name) pair); the first
+    /// match wins, with a preference for the harness the user has
+    /// registered.
+    fn resolve_harness_for_skill(name: &str, config: &Config) -> Result<String, String> {
+        let store = usk_core::store::Store::load();
+        let mut matches: Vec<&usk_core::store::StoreEntry> = store
+            .list()
+            .into_iter()
+            .filter(|e| e.name == name)
+            .collect();
+        if matches.is_empty() {
+            return Err(format!(
+                "skill '{}' is not in the store. Run `usk install` first.",
+                name
+            ));
+        }
+        // Prefer a harness the user has registered.
+        matches.sort_by_key(|e| {
+            if config.harnesses.contains_key(&e.harness) {
+                0
+            } else {
+                1
+            }
+        });
+        Ok(matches[0].harness.clone())
+    }
+
+    /// Build the adapter for a harness key. Mirrors `run_convert` in
+    /// `local_install.rs`.
+    fn adapter_for(harness: &str) -> Result<Box<dyn HarnessAdapter>, String> {
+        match harness {
+            "claude-code" => Ok(Box::new(usk_harness_claude::converter::ClaudeCodeAdapter)),
+            "codex-cli" => Ok(Box::new(usk_harness_codex::converter::CodexCliAdapter)),
+            other => Err(format!(
+                "unknown harness '{}'; cannot enable/disable",
+                other
+            )),
+        }
+    }
+
+    pub fn enable(name: &str, config: &Config) -> Result<(), String> {
+        let harness = resolve_harness_for_skill(name, config)?;
+        let adapter = adapter_for(&harness)?;
+        let store_root = usk_core::store::Store::harness_root(&harness);
+        adapter
+            .enable(name, &store_root)
+            .map_err(|e| format!("enable failed: {}", e))?;
+        let mut store = usk_core::store::Store::load();
+        store
+            .set_enabled(&harness, name, true)
+            .map_err(|e| format!("set_enabled: {}", e))?;
+        println!("Enabled '{}' (harness: {})", name, harness);
+        Ok(())
+    }
+
+    pub fn disable(name: &str, config: &Config) -> Result<(), String> {
+        let harness = resolve_harness_for_skill(name, config)?;
+        let adapter = adapter_for(&harness)?;
+        adapter
+            .disable(name)
+            .map_err(|e| format!("disable failed: {}", e))?;
+        let mut store = usk_core::store::Store::load();
+        store
+            .set_enabled(&harness, name, false)
+            .map_err(|e| format!("set_enabled: {}", e))?;
+        println!("Disabled '{}' (harness: {})", name, harness);
+        Ok(())
+    }
+
+    pub fn status(_config: &Config) -> Result<(), String> {
+        let store = usk_core::store::Store::load();
+        let entries = store.list();
+        if entries.is_empty() {
+            println!("No installed skills.");
+            println!("  Use `usk install <path>` to install a skill.");
+            return Ok(());
+        }
+        println!("Installed skills:");
+        for entry in entries {
+            let marker = if entry.enabled { "enabled " } else { "disabled" };
+            println!(
+                "  [{}] {} v{} @ {}",
+                marker, entry.name, entry.version, entry.harness
+            );
+        }
+        Ok(())
     }
 }
 
@@ -880,50 +955,13 @@ entry: SKILL.md
         std::env::remove_var("USK_CONFIG_DIR");
     }
 
-    /// Sanity check: `get_adapters` honors the `--harness` filter and the
-    /// `config.harnesses` source of truth.
-    #[test]
-    fn get_adapters_uses_config_source_of_truth() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        std::env::set_var("USK_CONFIG_DIR", tmp.path());
-
-        // Empty config -> no adapters, no implicit defaults.
-        let mut config = Config::default();
-        config.harnesses.clear();
-        let names = crate::commands::adapter_names_for_test(None, &config);
-        assert!(names.is_empty(), "empty harnesses should yield no adapters");
-
-        // Only claude-code registered -> exactly one adapter.
-        config
-            .harnesses
-            .insert("claude-code".to_string(), "usk-harness-claude".to_string());
-        let names = crate::commands::adapter_names_for_test(None, &config);
-        assert_eq!(names, vec!["claude-code"]);
-
-        // Explicit filter that doesn't match anything -> empty.
-        let names = crate::commands::adapter_names_for_test(Some("does-not-exist"), &config);
-        assert!(names.is_empty());
-
-        // Unknown harness key registered -> warning + skip (no panic).
-        config
-            .harnesses
-            .insert("mystery-harness".to_string(), "usk-harness-mystery".to_string());
-        let names = crate::commands::adapter_names_for_test(None, &config);
-        // Should still only have claude-code; the unknown key is skipped.
-        assert!(names.contains(&"claude-code".to_string()));
-        assert!(!names.contains(&"mystery-harness".to_string()));
-
-        std::env::remove_var("USK_CONFIG_DIR");
-    }
-
     // --- harness subcommand tests ---
     //
     // These tests manipulate the `USK_CONFIG_DIR` env var, which is
     // process-global state. They are marked `#[serial]` so they run
     // one-at-a-time and don't race each other (or the
-    // `install_persists_to_config` and
-    // `get_adapters_uses_config_source_of_truth` tests above, which
-    // also touch this env var).
+    // `install_persists_to_config` test above, which also touches
+    // this env var).
 
     use crate::commands::{harness_add, harness_list, harness_remove};
 
@@ -1017,6 +1055,54 @@ entry: SKILL.md
         let reloaded = Config::load();
         assert!(reloaded.harnesses.contains_key("claude-code"));
         assert!(reloaded.harnesses.contains_key("codex-cli"));
+
+        std::env::remove_var("USK_CONFIG_DIR");
+    }
+
+    /// U6: `usk install <name>` in registry mode (non-path, non-URL)
+    /// must fail early with a clear message when no `registry_url` is
+    /// configured. The user is pointed at `--path` and `--url`
+    /// alternatives plus the `~/.usk/config.toml` override.
+    #[tokio::test]
+    #[serial]
+    async fn install_registry_mode_errors_when_registry_url_empty() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("USK_CONFIG_DIR", temp.path());
+
+        let install_dir = temp.path().join("skills");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        let config = Config {
+            registry_url: String::new(), // explicit empty, mirroring Config::default()
+            install_dir: install_dir.clone(),
+            harnesses: HashMap::new(),
+            installed: HashMap::new(),
+        };
+
+        // The client is irrelevant: the empty-URL check must run
+        // before any network call. We still build one so the signature
+        // matches; pointing at an unroutable address proves the check
+        // does not reach the network at all.
+        let client = RegistryClient::new("http://127.0.0.1:1");
+
+        // A bare name is neither a local path nor a URL, so this hits
+        // the registry-mode branch.
+        let result = install("foo", None, None, false, &config, &client).await;
+        let err = result.expect_err("expected empty-URL error");
+        assert!(
+            err.contains("no registry URL configured"),
+            "error message should mention empty-URL diagnostic, got: {}",
+            err
+        );
+        assert!(
+            err.contains("--path") || err.contains("`usk install <path>`"),
+            "error message should point at local-path install, got: {}",
+            err
+        );
+        assert!(
+            err.contains("--url") || err.contains("`usk install <url>`"),
+            "error message should point at URL install, got: {}",
+            err
+        );
 
         std::env::remove_var("USK_CONFIG_DIR");
     }

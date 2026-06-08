@@ -86,6 +86,39 @@ Discovery is centralized in `usk-harness-core::discovery::KNOWN_HARNESSES` — a
 
 ## Data flow
 
+The local-first install path is the primary user journey. The registry
+is opt-in: a user configures `registry_url` in `~/.usk/config.toml`
+only when they need a private or shared registry. With the default
+config, `usk install <name>` (registry mode) errors with a clear
+message pointing at `--path` and `--url`.
+
+### Local-first install (default)
+
+```
+user                  skill folder               harness native path
+  |                        |                            |
+  |  usk install ./skill   |                            |
+  |  --harness claude-code |                            |
+  |----------------------->|                            |
+  |                        | parse skill.yaml, validate |
+  |                        | run HarnessAdapter::convert |
+  |                        |  with harness-native path   |
+  |                        |  as destination             |
+  |                        |--------------------------->|
+  |                        |  files written to           |
+  |                        |  ~/.claude/skills/<name>/   |
+  |<-----------------------|                            |
+  |  Installed to <path>   |                            |
+```
+
+The `converted/` subdirectory indirection is gone; the adapter writes
+to the path the harness reads from.
+
+### Self-hosted registry (opt-in)
+
+When a user has set `registry_url` in `~/.usk/config.toml`, the
+`usk install <name>` flow routes through the registry server:
+
 ```
 author                  registry                    consumer
   |                        |                            |

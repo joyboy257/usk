@@ -133,9 +133,7 @@ fn check_instructions(source: &Path, out: &mut ValidationOutcome) {
         }
     }
     if count == 0 {
-        out.warn(format!(
-            "instructions/: directory is empty (consider removing or populating)"
-        ));
+        out.warn("instructions/: directory is empty (consider removing or populating)".to_string());
     }
 }
 

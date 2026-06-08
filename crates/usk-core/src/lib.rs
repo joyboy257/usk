@@ -6,3 +6,4 @@ pub mod error;
 pub mod config;
 pub mod lockfile;
 pub mod resolver;
+pub mod store;

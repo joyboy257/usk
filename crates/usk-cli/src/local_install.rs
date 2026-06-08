@@ -115,32 +115,107 @@ pub fn install_from_path_with_target(
             )
         })?;
     }
-    if target.exists() {
-        std::fs::remove_dir_all(&target).map_err(|e| {
-            format!(
-                "failed to clear existing install at {}: {}",
-                target.display(),
-                e
-            )
-        })?;
+
+    // U4 store + projection model. When the user did NOT pass
+    // `--target`, the harness-native path is a *projection* — a
+    // symlink at `target` that points at the USK-managed store
+    // entry. The store at `~/.usk/store/<harness>/<name>/` is the
+    // source of truth; `usk disable` removes the projection without
+    // touching the store, and `usk enable` re-creates the symlink.
+    //
+    // When the user DID pass `--target`, the legacy behavior stands
+    // — write directly to the explicit path. The store is opt-in
+    // and the legacy behavior is preserved for ad-hoc targets.
+    if target_override.is_none() {
+        install_via_store(harness, &skill, source, &target)?;
+    } else {
+        install_direct(source, &target)?;
+        run_convert(harness, &skill, source, &target)?;
     }
-    std::fs::create_dir_all(&target)
-        .map_err(|e| format!("failed to create install dir {}: {}", target.display(), e))?;
-
-    // Copy the raw skill source into the target so the harness
-    // adapter's `convert` step sees the same files (skill.yaml,
-    // supporting dirs) it would for a registry install where the
-    // tarball has been extracted in place. The adapter writes its
-    // own output on top; we keep the originals around so the
-    // install location is self-describing (e.g. `usk inspect`,
-    // `usk read` can find `skill.yaml` here).
-    copy_dir_contents(source, &target)?;
-
-    run_convert(harness, &skill, source, &target)?;
 
     persist_install(config, &skill, harness, &target)?;
 
     Ok(target)
+}
+
+/// Install the skill into the USK store and create a projection
+/// (symlink) at the harness-native path. The store entry is
+/// `~/.usk/store/<harness>/<name>/`; the symlink is at
+/// `~/.claude/skills/<name>/` (or the equivalent for the harness).
+fn install_via_store(
+    harness: &str,
+    skill: &usk_core::schema::Skill,
+    source: &Path,
+    projection: &Path,
+) -> Result<(), String> {
+    use usk_core::store::{Store, StoreEntry};
+
+    let store_entry = Store::entry_path(harness, &skill.name);
+    if let Some(parent) = store_entry.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create store root {}: {}", parent.display(), e))?;
+    }
+    if store_entry.exists() {
+        std::fs::remove_dir_all(&store_entry)
+            .map_err(|e| format!("clear old store entry: {}", e))?;
+    }
+    std::fs::create_dir_all(&store_entry)
+        .map_err(|e| format!("create store entry {}: {}", store_entry.display(), e))?;
+
+    // Copy raw source into the store so the convert step sees the
+    // same layout a registry install would see.
+    copy_dir_contents(source, &store_entry)?;
+    run_convert(harness, skill, source, &store_entry)?;
+
+    // The projection at the harness-native path: create the parent
+    // (already done by caller), then symlink.
+    if projection.exists() || projection.is_symlink() {
+        // remove_file works for both symlinks and regular files; for
+        // a directory, we need remove_dir_all. Use a single
+        // conditional: a symlink is never a directory.
+        if projection.is_symlink() || projection.is_file() {
+            std::fs::remove_file(projection).ok();
+        } else {
+            std::fs::remove_dir_all(projection).ok();
+        }
+    }
+    std::os::unix::fs::symlink(&store_entry, projection).map_err(|e| {
+        format!(
+            "create projection {} -> {}: {}",
+            projection.display(),
+            store_entry.display(),
+            e
+        )
+    })?;
+
+    // Record the install in the store index.
+    let mut store = Store::load();
+    store.add(StoreEntry {
+        harness: harness.to_string(),
+        name: skill.name.clone(),
+        version: skill.version.clone(),
+        store_path: store_entry,
+        enabled: true,
+    });
+    if let Err(e) = store.save() {
+        eprintln!("warning: store index write failed: {}", e);
+    }
+
+    Ok(())
+}
+
+/// Legacy direct-to-target install (used when `--target` is passed).
+/// Writes the source files to `target` and runs the adapter
+/// against the same path. No store, no projection.
+fn install_direct(source: &Path, target: &Path) -> Result<(), String> {
+    if target.exists() {
+        std::fs::remove_dir_all(target)
+            .map_err(|e| format!("failed to clear existing install at {}: {}", target.display(), e))?;
+    }
+    std::fs::create_dir_all(target)
+        .map_err(|e| format!("failed to create install dir {}: {}", target.display(), e))?;
+    copy_dir_contents(source, target)?;
+    Ok(())
 }
 
 /// Copy the contents of `src` into `dst` (which must already exist).
@@ -687,6 +762,34 @@ entry: SKILL.md
         std::fs::write(dir.join("SKILL.md"), format!("# {}\n", name)).unwrap();
     }
 
+    /// Run `f` with a set of env vars temporarily set, restoring
+    /// (or removing) the prior values on the way out. `vars` is a
+    /// slice of `(name, Some(value))` to set or `(name, None)` to
+    /// remove.
+    fn with_env<F: FnOnce()>(vars: &[(&str, Option<&str>)], f: F) {
+        struct Restore(Vec<(String, Option<String>)>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                for (k, v) in self.0.drain(..) {
+                    match v {
+                        Some(val) => std::env::set_var(&k, val),
+                        None => std::env::remove_var(&k),
+                    }
+                }
+            }
+        }
+        let mut prior: Vec<(String, Option<String>)> = Vec::new();
+        for (k, v) in vars {
+            prior.push((k.to_string(), std::env::var(k).ok()));
+            match v {
+                Some(val) => std::env::set_var(k, val),
+                None => std::env::remove_var(k),
+            }
+        }
+        let _restore = Restore(prior);
+        f();
+    }
+
     fn test_config(install_dir: &Path) -> Config {
         let mut harnesses = HashMap::new();
         harnesses.insert(
@@ -759,21 +862,29 @@ entry: SKILL.md
         let source = tempdir().expect("source");
         write_skill(source.path(), "my-skill");
 
-        std::env::set_var("HOME", home.path());
-        let config = test_config(install_dir.path());
-        let result = install_from_path(source.path(), "claude-code", &config);
-        std::env::remove_var("HOME");
-
-        assert!(result.is_ok());
-
-        let reloaded = Config::load();
-        let entry = reloaded
-            .installed
-            .get("my-skill")
-            .expect("my-skill should be in config.installed");
-        assert_eq!(entry.harness, "claude-code");
-        assert_eq!(entry.version, "1.0.0");
-        assert!(entry.install_path.ends_with("my-skill"));
+        // Use USK_CONFIG_DIR so the install's `config.save()` and the
+        // post-install `Config::load()` agree on the same path
+        // regardless of the parent process's HOME. Previously the
+        // test set `HOME` and then removed it before reloading,
+        // which made `Config::load()` fall back to the real `$HOME`
+        // and miss the just-written config.
+        let config_dir = tempdir().expect("config dir");
+        with_env(&[
+            ("USK_CONFIG_DIR", Some(config_dir.path().to_str().unwrap())),
+            ("HOME", Some(home.path().to_str().unwrap())),
+        ], || {
+            let config = test_config(install_dir.path());
+            install_from_path(source.path(), "claude-code", &config)
+                .expect("install should succeed");
+            let reloaded = Config::load();
+            let entry = reloaded
+                .installed
+                .get("my-skill")
+                .expect("my-skill should be in config.installed");
+            assert_eq!(entry.harness, "claude-code");
+            assert_eq!(entry.version, "1.0.0");
+            assert!(entry.install_path.ends_with("my-skill"));
+        });
     }
 
     #[test]
@@ -1033,7 +1144,7 @@ entry: SKILL.md
         let home = tempdir().expect("home");
         let install_dir = tempdir().expect("install dir");
         let source = tempdir().expect("source");
-        write_skill(&source.path(), "top-skill");
+        write_skill(source.path(), "top-skill");
 
         // A graph where "top-skill" requires "dep-skill" (which has no deps).
         let dep_meta = usk_core::schema::SkillMeta {
@@ -1090,7 +1201,7 @@ entry: SKILL.md
         let home = tempdir().expect("home");
         let install_dir = tempdir().expect("install dir");
         let source = tempdir().expect("source");
-        write_skill(&source.path(), "needs-missing");
+        write_skill(source.path(), "needs-missing");
 
         let top_meta = usk_core::schema::SkillMeta {
             name: "needs-missing".to_string(),

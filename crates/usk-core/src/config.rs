@@ -21,13 +21,12 @@ impl Default for Config {
     fn default() -> Self {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
         let usk_dir = PathBuf::from(&home).join(".usk");
-        // The default registry. Self-hosting remains supported by overriding
-        // `registry_url` in `~/.usk/config.toml` or via the `USK_REGISTRY_URL`
-        // env var. The default points to the public USK registry; if it is
-        // unreachable, `usk install <name>` (registry mode) will fail with a
-        // clear connection error.
+        // Empty default means registry mode is opt-in. Users configure
+        // `registry_url` only when they have a private registry. The
+        // local-first install path (`usk install <path>`) is the default
+        // user flow and does not touch this field.
         Config {
-            registry_url: "https://registry.usk.dev".to_string(),
+            registry_url: String::new(),
             install_dir: usk_dir.join("skills"),
             harnesses: HashMap::from([
                 ("claude-code".to_string(), "usk-harness-claude".to_string()),
@@ -80,5 +79,18 @@ impl Config {
         let content = toml::to_string_pretty(self)?;
         std::fs::write(Self::config_path(), content)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// U6: a fresh user with no `~/.usk/config.toml` must not get a
+    /// placeholder registry URL. The local-first install path is the
+    /// default; registry mode is opt-in via explicit configuration.
+    #[test]
+    fn default_registry_url_is_empty() {
+        assert_eq!(Config::default().registry_url, "");
     }
 }

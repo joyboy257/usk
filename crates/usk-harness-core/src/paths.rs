@@ -9,6 +9,22 @@
 //!
 //! Callers that need an override can pass `--target <path>` and skip
 //! this lookup.
+//!
+//! ## Verification sources
+//!
+//! - **`claude-code` → `~/.claude/skills/<name>/`** — verified 2026-06-08
+//!   against a live install on macOS (130+ skills present at
+//!   `~/.claude/skills/`). Claude Code's docs describe this as the
+//!   canonical skill-read directory. See
+//!   <https://docs.claude.com/en/docs/claude-code/skills>.
+//! - **`codex-cli` → `~/.codex/agents/<name>.yaml`** — UNVERIFIED. On
+//!   the development machine used for v0.2 verification, the
+//!   `~/.codex/agents/` directory did not exist; Codex CLI's actual
+//!   skill layout is uncertain. Treated as best-effort pending docs
+//!   research. If a user runs `usk install --harness codex-cli` and
+//!   the file does not appear in Codex's UI, the user should fall
+//!   back to `--target` and report the path the harness actually
+//!   reads from so this constant can be corrected.
 
 use std::path::{Path, PathBuf};
 
@@ -71,7 +87,13 @@ pub fn resolve_install_path(harness_key: &str, skill_name: &str) -> Option<PathB
 /// to create the install root before invoking the harness adapter.
 pub fn install_root(harness_key: &str) -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
-    let home = PathBuf::from(home);
+    install_root_in(&PathBuf::from(home), harness_key)
+}
+
+/// Same as [`install_root`] but with an explicit `home` directory.
+/// Lets tests and code paths that already have a `Path` in hand
+/// avoid races on the process-global `HOME` env var.
+pub fn install_root_in(home: &Path, harness_key: &str) -> Option<PathBuf> {
     match harness_key {
         "claude-code" => Some(home.join(".claude").join("skills")),
         "codex-cli" => Some(home.join(".codex").join("agents")),
@@ -106,6 +128,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn default_install_path_resolves_against_home() {
         // Use a stable synthetic HOME to assert the prefix exactly.
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -156,6 +179,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn resolve_install_path_rejects_traversal() {
         let tmp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", tmp.path());
@@ -167,6 +191,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn install_root_returns_parent_directory() {
         let tmp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", tmp.path());
@@ -181,6 +206,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn is_under_install_root_detects_membership() {
         let tmp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", tmp.path());

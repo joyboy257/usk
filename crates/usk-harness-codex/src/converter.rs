@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use usk_core::schema::Skill;
 use usk_harness_core::adapter::HarnessAdapter;
-use usk_harness_core::error::Result;
+use usk_harness_core::error::{HarnessError, Result};
 
 #[derive(serde::Serialize)]
 struct CodexAgent {
@@ -32,6 +32,62 @@ pub struct CodexCliAdapter;
 impl HarnessAdapter for CodexCliAdapter {
     fn name(&self) -> &str {
         "codex-cli"
+    }
+
+    fn install_root(&self) -> Option<PathBuf> {
+        usk_harness_core::paths::install_root("codex-cli")
+    }
+
+    /// Codex CLI's projection is a single file, not a directory. The
+    /// default `install_path(name)` would point at `<root>/<name>` —
+    /// we override it to `<root>/<name>.yaml` to match Codex's
+    /// expected file layout. The `enable` projection points the
+    /// `.yaml` file at `<store_root>/<name>/agent.yaml` (the
+    /// `agent.yaml` the adapter's `convert` writes into the store
+    /// directory).
+    fn install_path(&self, name: &str) -> Option<PathBuf> {
+        self.install_root().map(|root| root.join(format!("{}.yaml", name)))
+    }
+
+    fn enable(&self, name: &str, store_root: &Path) -> Result<()> {
+        let target = self
+            .install_path(name)
+            .ok_or_else(|| HarnessError::ConversionError(format!(
+                "harness '{}' has no install_path for '{}'",
+                self.name(),
+                name
+            )))?;
+        // The store holds a directory `<store_root>/<name>/` whose
+        // `agent.yaml` is the harness's view of the skill. We point
+        // the projection (a single file) at that file inside the
+        // store directory.
+        let source = store_root.join(name).join("agent.yaml");
+
+        if target.is_symlink() {
+            if let Ok(existing) = std::fs::read_link(&target) {
+                if existing == source {
+                    return Ok(());
+                }
+                return Err(HarnessError::ConversionError(format!(
+                    "{} already exists and points to {} (expected {})",
+                    target.display(),
+                    existing.display(),
+                    source.display()
+                )));
+            }
+        }
+        if target.exists() {
+            return Err(HarnessError::ConversionError(format!(
+                "{} exists and is not a symlink; remove it before enabling",
+                target.display()
+            )));
+        }
+
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::os::unix::fs::symlink(&source, &target)?;
+        Ok(())
     }
 
     fn convert(&self, skill: &Skill, source_dir: &Path, output_dir: &Path) -> Result<()> {

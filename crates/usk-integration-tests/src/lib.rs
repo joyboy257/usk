@@ -262,9 +262,7 @@ pub fn build_tarball(entries: &[(&str, &[u8])]) -> Vec<u8> {
         tar_bytes.write_all(content).expect("write content");
         // Pad to 512-byte boundary
         let pad = (512 - (content.len() % 512)) % 512;
-        for _ in 0..pad {
-            tar_bytes.push(0);
-        }
+        tar_bytes.resize(tar_bytes.len() + pad, 0);
     }
     // End-of-archive: two zero blocks
     tar_bytes.resize(tar_bytes.len() + 1024, 0);
