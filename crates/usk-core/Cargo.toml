@@ -11,7 +11,7 @@ thiserror.workspace = true
 semver.workspace = true
 walkdir.workspace = true
 serde_json.workspace = true
-toml = "0.8"
+toml = "1.1"
 
 [dev-dependencies]
 tempfile.workspace = true

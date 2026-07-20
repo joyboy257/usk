@@ -16,7 +16,7 @@ reqwest = { workspace = true, features = ["blocking"] }
 tokio.workspace = true
 flate2.workspace = true
 serial_test.workspace = true
-toml = "0.8"
+toml = "1.1"
 
 [dev-dependencies]
 tempfile.workspace = true
