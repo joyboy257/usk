@@ -1,167 +1,355 @@
-# usk — Universal Skills Library
+<p align="center">
+  <img src="docs/assets/readme/usk-hero.svg" alt="USK — Universal Skills Library" width="100%" />
+</p>
 
-> A harness-agnostic registry for reusable AI agent skills.
+<p align="center">
+  <a href="#quick-start-from-source"><strong>Quick start</strong></a>
+  &nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="#how-portability-works"><strong>Architecture</strong></a>
+  &nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="#cli-surface"><strong>CLI</strong></a>
+  &nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="spec/SKILL_SPEC.md"><strong>Skill specification</strong></a>
+  &nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="#self-hosted-registry-optional"><strong>Registry</strong></a>
+</p>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
-[![Crates.io](https://img.shields.io/crates/v/usk-core.svg?style=flat-square)](https://crates.io/crates/usk-core)
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f97316.svg" alt="MIT License" /></a>
+  <img src="https://img.shields.io/badge/language-Rust-0b0d12?logo=rust&logoColor=f97316" alt="Rust" />
+  <img src="https://img.shields.io/badge/distribution-local--first-0b0d12" alt="Local-first" />
+  <img src="https://img.shields.io/badge/adapters-Claude%20Code%20%7C%20Codex-0b0d12" alt="Claude Code and Codex adapters" />
+  <img src="https://img.shields.io/badge/version-0.1.0-1f2937" alt="Version 0.1.0" />
+</p>
 
-## What is USK?
+<p align="center">
+  <strong>Write a skill once. Validate it once. Install it into the agent harness that needs it.</strong><br />
+  USK is a Rust schema, CLI, adapter system, and optional registry for reusable AI-agent skills that should survive the rise and fall of individual frameworks.
+</p>
 
-USK is a registry, schema, and toolchain for **Universal Skills** — reusable packages of instructions, examples, templates, scripts, and reference material that teach an AI agent a specific method of working. Skills are authored once in a harness-agnostic format and converted to any supported agent framework via pluggable adapters.
+> [!IMPORTANT]
+> USK is currently distributed from source. The repository does not yet publish crates or prebuilt binaries, and the former `usk.dev/install.sh` path is not active. The current Cargo package installs the executable as `usk-cli`; a future distribution release can expose the shorter `usk` binary name.
 
-## Why?
+## Recruiter quick scan
 
-AI agent frameworks are multiplying. Without a shared skills layer, every team rewrites the same escalation handling, sales prep, or code review checklist for Claude Code, Codex CLI, and whatever comes next. USK fixes that:
+| | |
+| --- | --- |
+| **What I built** | A harness-agnostic packaging and distribution layer for AI-agent skills: canonical schema, parser, validator, lockfile, local store, search index, CLI, adapters, integration tests, and an optional self-hosted registry. |
+| **My role** | Product definition, package specification, Rust workspace architecture, CLI and adapter design, registry semantics, validation model, testing, and open-source documentation. |
+| **Core challenge** | Preserve reusable operating methods across incompatible agent harnesses without reducing them to copy-pasted prompts or coupling authors to one vendor's filesystem format. |
+| **Primary journey** | Author `skill.yaml` + `SKILL.md` → inspect and validate → convert or install → write directly to the harness-native location. |
+| **Supported adapters** | Claude Code skill directories and Codex `agent.yaml` output. |
+| **Stack** | Rust 2021, Clap, Serde, Axum, Tokio, Reqwest, Git2, SemVer, tar/gzip, filesystem store, integration-test crate. |
 
-- **One authoring format** — write `SKILL.md` once.
-- **Many harnesses** — adapters convert the same skill to Claude Code, Codex CLI, etc.
-- **A registry** — publish, search, version, and install skills with one tool.
-- **Repeatable methods** — capture the way your team works, not just what they know.
+## Why a universal skills layer
 
-## Supported Harnesses
+Agent harnesses increasingly support reusable instructions, examples, templates, scripts, and references—but each harness defines its own discovery paths and package conventions.
 
-| Harness | Adapter crate | Output format |
-|---------|---------------|---------------|
-| Claude Code | [`usk-harness-claude`](crates/usk-harness-claude) | `SKILL.md` directory |
-| Codex CLI | [`usk-harness-codex`](crates/usk-harness-codex) | `agent.yaml` |
+Without a portability layer, teams repeatedly rewrite the same methods:
 
-## Quick Start
+- incident escalation;
+- sales-call preparation;
+- code review and remediation;
+- deployment verification;
+- research and evidence gathering;
+- domain-specific operating procedures.
 
-Install `usk` with a one-liner, then drop a skill folder in and install it — no registry server required.
+USK separates the **method** from the **harness projection**:
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>Universal package</h3>
+      One canonical manifest, instruction body, examples, templates, scripts, references, compatibility metadata, and semantic version.
+    </td>
+    <td width="50%" valign="top">
+      <h3>Harness-native projection</h3>
+      A pluggable adapter converts that package into the exact path and format consumed by Claude Code, Codex, or a future harness.
+    </td>
+  </tr>
+</table>
+
+The objective is not to invent a lowest-common-denominator prompt file. It is to preserve rich, testable working methods while isolating framework-specific installation details.
+
+## Quick start from source
+
+Requirements:
+
+- Rust and Cargo;
+- Git;
+- a supported agent harness if you want to install the converted skill into its native location.
 
 ```bash
-# 1. Install the CLI (no Rust toolchain needed for consumers)
-curl -fsSL https://usk.dev/install.sh | sh
+git clone https://github.com/joyboy257/usk.git
+cd usk
 
-# 2. Install a skill from a local directory for Claude Code
-usk install ./spec/examples/escalation-handling --harness claude-code
-
-# Files land at ~/.claude/skills/escalation-handling/ — exactly where
-# Claude Code reads from. No staging dir, no manual copy.
+cargo install --path crates/usk-cli
 ```
 
-The same flow works for URLs (HTTP archive or git clone) and for a
-self-hosted registry when you have one. `usk install <name>` (registry
-mode) requires `registry_url` to be configured in `~/.usk/config.toml`
-— see [Self-hosted registry (optional)](#self-hosted-registry-optional).
-See [CLI Reference](#cli-reference) for the full surface.
-
-### Authoring
+The installed executable is currently named `usk-cli`.
 
 ```bash
-# Create a new skill from the default scaffold
-usk new my-skill
+# Inspect and validate an included example skill
+usk-cli inspect spec/examples/escalation-handling
+usk-cli validate spec/examples/escalation-handling
 
-# Inspect / validate / preview conversion before publishing
-usk inspect ./my-skill
-usk validate ./my-skill
-usk convert ./my-skill --harness claude-code --out /tmp/preview
+# Preview a harness conversion without installing it
+usk-cli convert spec/examples/escalation-handling \
+  --harness claude-code \
+  --out /tmp/escalation-preview
+
+# Install directly into Claude Code's native skills directory
+usk-cli install ./spec/examples/escalation-handling \
+  --harness claude-code
 ```
 
-### Self-hosting the registry (optional)
+For Claude Code, the adapter writes to the harness-native skill path, such as:
 
-`usk` works without a registry — the local-first install path in
-[Quick Start](#quick-start) is the default and does not need a server.
-A registry is only useful if you want versioned, shared skills across
-a team. `usk install <name>` (registry mode) requires `registry_url`
-to be configured in `~/.usk/config.toml`.
-
-```bash
-cargo run --bin usk-server
-# Server listening on 0.0.0.0:8080
-
-# Configure the CLI to point at the local registry
-usk config set registry_url http://localhost:8080
+```text
+~/.claude/skills/escalation-handling/
 ```
 
-## Anatomy of a Skill
+No registry server is required for local directories or supported URL sources.
 
-A skill is a directory with a manifest and an instruction body:
+## Anatomy of a skill
 
-```
+```text
 my-skill/
-├── skill.yaml             # Metadata + manifest (REQUIRED)
-├── SKILL.md               # Main instruction document (REQUIRED)
-├── instructions/          # Sub-step instructions (optional)
-├── examples/              # Example inputs/outputs (optional)
-├── templates/             # Output templates (optional)
-├── scripts/               # Executable scripts (optional)
-└── references/            # Reference documentation (optional)
+├── skill.yaml             # Manifest and metadata — required
+├── SKILL.md               # Main operating instructions — required
+├── instructions/          # Focused sub-step instructions — optional
+├── examples/              # Input/output examples — optional
+├── templates/             # Reusable output templates — optional
+├── scripts/               # Executable helpers — optional
+└── references/            # Supporting documentation — optional
 ```
 
-See [`spec/SKILL_SPEC.md`](spec/SKILL_SPEC.md) for the full schema and the [example skills](spec/examples/).
+The canonical format is documented in [`spec/SKILL_SPEC.md`](spec/SKILL_SPEC.md). Complete examples are available under [`spec/examples/`](spec/examples/):
 
-## CLI Reference
+- [`escalation-handling`](spec/examples/escalation-handling/)
+- [`sales-call-prep`](spec/examples/sales-call-prep/)
 
-| Command | Description |
-|---------|-------------|
-| `usk new <name>` | Scaffold a new skill from a template |
-| `usk publish [path]` | Publish a skill to the local registry |
-| `usk search <query>` | Search the registry by name, tag, or description |
-| `usk install <name-or-path-or-url> [--harness <name>] [--target <path>]` | Install a skill from the registry, a local directory, or a URL |
-| `usk list` | List installed skills |
-| `usk update [name]` | Update installed skills (defaults to all) |
-| `usk outdated` | List skills with available updates |
-| `usk harness add\|remove\|list` | Manage registered harnesses |
+A skill package can declare metadata, semantic version, authorship, tags, supported harnesses, compatibility ranges, entry points, and included resources.
 
-## Self-hosted registry (optional)
+## How portability works
 
-If you have a private registry or want to share skills within a team, USK
-includes a self-hostable server. **Most users do not need this** — the
-local-first install path in [Quick Start](#quick-start) covers the
-central use case without running any server.
+```text
+Universal skill directory
+  skill.yaml · SKILL.md · examples · templates · scripts · references
+                              │
+                              ▼
+                         usk-core
+       parse · validate · resolve · index · lockfile · package store
+                              │
+                              ▼
+                    HarnessAdapter contract
+                    discovery · paths · conversion
+                              │
+              ┌───────────────┴───────────────┐
+              ▼                               ▼
+     Claude Code adapter                 Codex adapter
+     native skill directory              agent.yaml output
+```
 
-The `usk-server` is an axum-based registry server with a git audit trail. Run it locally:
+### Core package model
+
+`usk-core` owns:
+
+- schema and typed package structures;
+- manifest and Markdown parsing;
+- structural validation;
+- compatibility and semantic-version resolution;
+- search-index primitives;
+- configuration and local package-store paths;
+- installed-skill lockfile state.
+
+### Adapter contract
+
+`usk-harness-core` defines the shared adapter interface and harness discovery registry. Each adapter receives a parsed, validated skill plus a destination and emits the harness-specific projection.
+
+Adding another harness is intentionally bounded:
+
+1. implement the adapter contract;
+2. define native discovery and target paths;
+3. register the adapter in known harness discovery;
+4. add conversion and integration tests;
+5. document any features that cannot be represented safely.
+
+### Local-first installation
+
+The default path is deliberately serverless:
+
+```text
+local folder or URL
+        │
+        ▼
+parse and validate package
+        │
+        ▼
+select harness adapter
+        │
+        ▼
+write to harness-native destination
+        │
+        ▼
+record installed version and projection state
+```
+
+This makes USK useful for individuals and repositories before a shared registry exists.
+
+## Supported harnesses
+
+| Harness | Adapter crate | Current projection |
+| --- | --- | --- |
+| Claude Code | [`usk-harness-claude`](crates/usk-harness-claude/) | Native `SKILL.md` directory structure |
+| Codex | [`usk-harness-codex`](crates/usk-harness-codex/) | `agent.yaml` conversion |
+
+The adapter architecture is the product boundary. Support for future harnesses should extend this layer rather than fork the skill schema.
+
+## CLI surface
+
+The current source-built executable is `usk-cli`.
+
+| Command | Purpose |
+| --- | --- |
+| `new <name>` | Scaffold a new skill package. |
+| `inspect <path>` | Show parsed metadata, files, and package sizes. |
+| `read <path> <file>` | Print one file from a skill directory. |
+| `validate <path>` | Run structural package validation. |
+| `convert <path> --harness <name> --out <dir>` | Preview a harness-specific projection. |
+| `install <name-or-path-or-url> [--harness <name>] [--target <path>]` | Install from a registry, local directory, or URL. |
+| `install ... --locked` | Reproduce installation from `usk.lock`. |
+| `list` | List installed skills. |
+| `status` | Show installed skills and enabled/disabled projection state. |
+| `enable <name>` | Re-create a disabled harness projection. |
+| `disable <name>` | Remove the projection while preserving the stored package. |
+| `update [name]` | Update one or all installed skills. |
+| `outdated` | List installed skills with available versions. |
+| `harness add\|remove\|list` | Manage harness adapters. |
+| `publish [path]` | Validate and publish to a configured registry. |
+| `search <query>` | Search a configured registry. |
+| `doctor` | Diagnose paths, writability, installed state, and lockfile health. |
+
+Run the full help directly from the workspace:
 
 ```bash
-cargo run --bin usk-server
-# Server listening on 0.0.0.0:8080
+cargo run -p usk-cli -- --help
+cargo run -p usk-cli -- install --help
 ```
 
-Configuration:
+## Self-hosted registry — optional
 
-| Env var | Default | Description |
-|---------|---------|-------------|
-| `USK_REGISTRY_PATH` | `./registry` | Filesystem path for the on-disk registry |
-| `RUST_LOG` | `info` | Tracing filter directive |
+USK includes an Axum registry for teams that need versioned, shared skill distribution. Most local installs do not need it.
 
-The CLI reads its registry URL from `~/.usk/config.toml` (override via
-`USK_CONFIG_DIR`). The default config has an empty `registry_url`; the
-`usk install <name>` (registry mode) flow errors with a clear message
-if you have not set one. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-for the API surface and data flow.
-
-## Project Layout
-
+```bash
+cargo run -p usk-server
+# listens on 0.0.0.0:8080 by default
 ```
+
+Configure the CLI through `~/.usk/config.toml` or the CLI configuration surface before using name-based registry operations.
+
+The registry provides:
+
+- versioned publish and install routes;
+- immutable published versions;
+- per-`(name, version)` locking to prevent concurrent torn publishes;
+- filesystem package storage;
+- a Git commit for each accepted publish;
+- a rebuildable search index;
+- tarball retrieval and adapter-based consumer installation.
+
+```text
+author                     registry                         consumer
+  │                           │                                │
+  │ publish validated skill   │                                │
+  ├──────────────────────────▶│ lock · store · git commit      │
+  │                           │ update index                   │
+  │                           │                                │
+  │                           │◀──────────── search ────────────┤
+  │                           │──────── metadata/results ─────▶│
+  │                           │◀────────── install ─────────────┤
+  │                           │──────── package archive ──────▶│
+  │                           │             adapter conversion │
+```
+
+Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for route, storage, and data-flow details.
+
+## Rust workspace
+
+```text
 usk/
-├── Cargo.toml             # Workspace manifest
-├── README.md
-├── LICENSE
-├── spec/                  # Universal skill format spec
-│   ├── SKILL_SPEC.md
-│   └── examples/          # escalation-handling, sales-call-prep
 ├── crates/
-│   ├── usk-core/          # Schema, validation, parser, search index
-│   ├── usk-harness-core/  # HarnessAdapter trait + discovery
-│   ├── usk-harness-claude/
-│   ├── usk-harness-codex/
-│   ├── usk-cli/           # `usk` binary
-│   ├── usk-server/        # `usk-server` binary
-│   └── usk-integration-tests/
-└── docs/
-    ├── ARCHITECTURE.md
-    └── DEVELOPMENT.md
+│   ├── usk-core/               # Schema, parser, validation, resolver, store
+│   ├── usk-harness-core/       # Adapter contract, discovery, native paths
+│   ├── usk-harness-claude/     # Claude Code conversion
+│   ├── usk-harness-codex/      # Codex conversion
+│   ├── usk-cli/                # User-facing command-line tool
+│   ├── usk-server/             # Optional Axum registry
+│   └── usk-integration-tests/  # Cross-crate end-to-end tests
+├── spec/                       # Canonical specification and examples
+├── docs/                       # Architecture and development docs
+└── scripts/install.sh          # Source-tree installer helper
 ```
+
+All workspace crates currently share version `0.1.0`. The CLI and integration-test crates are explicitly marked `publish = false`, and public crate publication has not yet been completed.
+
+## Verification and development
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+Useful focused commands:
+
+```bash
+cargo test -p usk-core
+cargo test -p usk-integration-tests
+cargo run -p usk-cli -- doctor
+cargo run -p usk-cli -- validate spec/examples/escalation-handling
+```
+
+Development guidance lives in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+
+> [!NOTE]
+> The integration crate expects prebuilt `usk-cli` and `usk-server` binaries, so run `cargo build --workspace --bins` before its end-to-end tests. At the time of this README update, the functional suites completed 119 unit tests and 4 integration tests, but the repository still has pre-existing `rustfmt` drift, one Clippy boolean-assert warning under `-D warnings`, and an intermittent temporary-directory failure in the collection-install test that passed when rerun in isolation.
+
+## Current status
+
+| Area | Status |
+| --- | --- |
+| Universal skill specification and examples | **Present** |
+| Parser, validator, resolver, store, index, and lockfile | **Implemented** |
+| CLI authoring, inspection, conversion, install, and lifecycle commands | **Implemented** |
+| Claude Code and Codex adapters | **Implemented** |
+| Optional Axum registry and Git audit trail | **Implemented** |
+| Cross-crate integration-test package | **Present** |
+| Public crates.io publication | **Not currently published** |
+| Public prebuilt binary installer | **Not currently available** |
+| Short `usk` executable name | **CLI display name only; installed binary is currently `usk-cli`** |
+
+The next distribution milestone is packaging polish: explicit binary naming, release artifacts, checksums and provenance, a working installer endpoint, crate metadata, and repeatable installation tests across supported platforms.
+
+## What this project demonstrates
+
+- Rust workspace and crate-boundary design;
+- portable package schema and semantic-version reasoning;
+- CLI ergonomics and lifecycle management;
+- plugin/adapter architecture for changing external frameworks;
+- filesystem, lockfile, and package-store design;
+- immutable registry semantics and concurrency control;
+- Git-backed audit history;
+- truthful open-source distribution and documentation discipline.
 
 ## Contributing
 
-We welcome contributions — new harness adapters, bug fixes, docs, and example skills. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup, code style, and the PR process.
+New harness adapters, validation improvements, CLI fixes, package examples, and documentation are welcome. Read [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ## Security
 
-Report vulnerabilities per [`SECURITY.md`](SECURITY.md). Please do not file public issues for security bugs.
+Report vulnerabilities according to [`SECURITY.md`](SECURITY.md). Do not publish security-sensitive reports as public issues.
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+USK is available under the [MIT License](LICENSE).
